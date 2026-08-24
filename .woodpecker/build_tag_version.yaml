@@ -18,8 +18,12 @@ steps:
       registry: harbor.crystalnet.org
       auto_tag: true
       dockerfile: Dockerfile
-      build_args:
-      - DSH_CLIENT_COMMIT_HASH=${CI_COMMIT_SHA}
+      # forwards Woodpecker's own CI_COMMIT_SHA env var directly under the
+      # same name - ${CI_COMMIT_SHA} string-interpolated into a build_args
+      # item resolved to empty in this setup, confirmed via a real failed
+      # build (see Dockerfile's ARG CI_COMMIT_SHA comment)
+      build_args_from_env:
+      - CI_COMMIT_SHA
       platforms: linux/amd64
       dry_run: false
 when:

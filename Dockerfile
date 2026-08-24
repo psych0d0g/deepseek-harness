@@ -28,8 +28,17 @@ COPY . .
 # `git rev-parse HEAD` unless DSH_CLIENT_COMMIT_HASH is already set - passed
 # in from the host instead, since .dockerignore excludes .git (keeps the
 # build context small and avoids installing git in this stage).
-ARG DSH_CLIENT_COMMIT_HASH
-ENV DSH_CLIENT_COMMIT_HASH=${DSH_CLIENT_COMMIT_HASH}
+#
+# Sourced from a build-arg named CI_COMMIT_SHA specifically (not a custom
+# name): Woodpecker's plugin-docker-buildx build_args_from_env setting
+# forwards a named env var to buildx under that SAME name, no remapping -
+# ${CI_COMMIT_SHA} string-interpolated directly into a build_args list
+# item was tried first and silently resolved to an empty string in this
+# Woodpecker/plugin combo (confirmed via a real failed build:
+# "DSH_CLIENT_COMMIT_HASH must be a Git commit hash; got \"\"").
+# For a manual/local build: --build-arg CI_COMMIT_SHA=$(git rev-parse HEAD)
+ARG CI_COMMIT_SHA
+ENV DSH_CLIENT_COMMIT_HASH=${CI_COMMIT_SHA}
 
 # build:official: scripts/build.ts runs build:lib (tsc + tsdown for the
 # host+client runtime) then build:web, and stamps the client build record

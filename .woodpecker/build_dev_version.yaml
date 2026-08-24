@@ -15,8 +15,12 @@ steps:
       # Dockerfile's builder stage needs this since .dockerignore excludes
       # .git (keeps the build context small) - scripts/build.ts otherwise
       # shells out to `git rev-parse HEAD` for client-build stamping.
-      build_args:
-      - DSH_CLIENT_COMMIT_HASH=${CI_COMMIT_SHA}
+      # build_args_from_env forwards Woodpecker's own CI_COMMIT_SHA env var
+      # directly under the same name - ${CI_COMMIT_SHA} string-interpolated
+      # into a build_args item resolved to empty in this setup, confirmed
+      # via a real failed build (see Dockerfile's ARG CI_COMMIT_SHA comment).
+      build_args_from_env:
+      - CI_COMMIT_SHA
       # amd64-only: this build is a full pnpm-workspace TypeScript build
       # plus Chromium packaging, heavier than kube-kasm-agent's own
       # QEMU-emulated-arm64-adds-7-10+-minutes reasoning for dropping it.
