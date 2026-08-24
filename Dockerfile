@@ -135,6 +135,23 @@ RUN apt-get update \
     && npm install --global --no-audit --no-fund "pnpm@${PNPM_VERSION}" \
     && test "$(pnpm --version)" = "${PNPM_VERSION}"
 
+# Playwright as a globally-available library, not a new agent tool/plugin -
+# `require('playwright')`/`import ... from 'playwright'` works from any
+# project under /workspace without a local install first. Global npm
+# packages aren't on Node's normal module-resolution search path (it walks
+# up from the importing file's own ancestors, not global dirs) - NODE_PATH
+# (below, in the main ENV block) is what actually makes this work from
+# arbitrary project directories.
+#
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1: reuses the Debian chromium package
+# already installed above for the noVNC browser-desktop feature instead of
+# downloading Playwright's own bundled Chromium - one browser install to
+# maintain, no duplicate ~300MB download. A project using this must launch
+# with `channel: 'chromium', executablePath: process.env.CHROME_BIN`
+# rather than a bare `playwright.chromium.launch()` (which would look for
+# Playwright's own bundled browser that was deliberately never downloaded).
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global --no-audit --no-fund playwright
+
 # The whole installed tree, not just the @deepseek-ai/dsh subfolder: a
 # plain `npm install` hoists most dependencies (dsh-app-boot, dsh-base,
 # etc) to the TOP-LEVEL node_modules as siblings of @deepseek-ai/dsh, not
@@ -166,11 +183,15 @@ RUN chmod 0755 /usr/local/bin/chromium-docker \
     && test "$(dsh --version)" = "${DSH_VERSION}" \
     && chromium-docker --version
 
+# NODE_PATH: makes globally-installed packages (playwright) resolvable via
+# plain require()/import from any project under /workspace - see the
+# playwright RUN step above for why this is needed.
 ENV DSH_HOME=/home/node/.dsh \
     DSH_TELEMETRY_DISABLED=1 \
     HOME=/workspace \
     NODE_ENV=production \
     DISPLAY=:99 \
+    NODE_PATH=/usr/local/lib/node_modules \
     XDG_RUNTIME_DIR=/tmp/runtime-node \
     CHROME_BIN=/usr/local/bin/chromium-docker \
     CHROME_PATH=/usr/local/bin/chromium-docker \
