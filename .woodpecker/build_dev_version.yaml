@@ -1,0 +1,27 @@
+steps:
+  docker-build-dev:
+    image: woodpeckerci/plugin-docker-buildx:6.0.3
+    settings:
+      debug: true
+      repo: harbor.crystalnet.org/library/deepseek-harness
+      logins:
+      - registry: https://harbor.crystalnet.org/
+        username: robot$library+woodpecker
+        password:
+          from_secret: harbor_token
+      registry: harbor.crystalnet.org
+      tags: dev
+      dockerfile: Dockerfile
+      # Dockerfile's builder stage needs this since .dockerignore excludes
+      # .git (keeps the build context small) - scripts/build.ts otherwise
+      # shells out to `git rev-parse HEAD` for client-build stamping.
+      build_args:
+      - DSH_CLIENT_COMMIT_HASH=${CI_COMMIT_SHA}
+      # amd64-only: this build is a full pnpm-workspace TypeScript build
+      # plus Chromium packaging, heavier than kube-kasm-agent's own
+      # QEMU-emulated-arm64-adds-7-10+-minutes reasoning for dropping it.
+      platforms: linux/amd64
+      dry_run: false
+when:
+  branch: ${CI_REPO_DEFAULT_BRANCH}
+  event: push
