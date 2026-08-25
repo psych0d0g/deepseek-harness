@@ -152,6 +152,32 @@ RUN apt-get update \
 # Playwright's own bundled browser that was deliberately never downloaded).
 RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global --no-audit --no-fund playwright
 
+# Claude Code (Anthropic's coding-agent CLI) and Antigravity CLI (Google's
+# coding-agent CLI, github.com/google-antigravity/antigravity-cli) as
+# terminal tools available inside this container, alongside dsh itself -
+# not wired into dsh's own plugin/tool system, just installed binaries.
+# Neither needs credentials at install time; both authenticate on first
+# real run (`claude`: browser OAuth or ANTHROPIC_API_KEY;
+# `agy`: Google OAuth, a GCP project, or GEMINI_API_KEY), so this is safe
+# to bake into the image without a build-time auth prompt.
+#
+# claude-code: >=Node 22 required (this image has Node 24) - npm pulls in
+# a per-platform native binary as an optional dependency and links it in
+# via postinstall; the resulting `claude` binary doesn't invoke Node at
+# runtime.
+#
+# antigravity-cli: the official installer writes the `agy` binary to
+# $HOME/.local/bin - explicit HOME=/root here since this runs before this
+# stage's own ENV block sets HOME=/workspace (that value is for the node
+# user's later runtime, not this root build step), then relocated into
+# /usr/local/bin to be found on PATH regardless of runtime HOME, matching
+# the symlink pattern already used for dsh/chromium-docker below.
+RUN npm install --global --no-audit --no-fund @anthropic-ai/claude-code \
+    && test -n "$(command -v claude)" \
+    && HOME=/root curl -fsSL https://antigravity.google/cli/install.sh | bash \
+    && mv /root/.local/bin/agy /usr/local/bin/agy \
+    && chmod 0755 /usr/local/bin/agy
+
 # The whole installed tree, not just the @deepseek-ai/dsh subfolder: a
 # plain `npm install` hoists most dependencies (dsh-app-boot, dsh-base,
 # etc) to the TOP-LEVEL node_modules as siblings of @deepseek-ai/dsh, not
