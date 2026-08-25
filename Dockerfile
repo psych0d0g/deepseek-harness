@@ -219,6 +219,32 @@ RUN chmod 0755 /usr/local/bin/chromium-docker \
     && test "$(dsh --version)" = "${DSH_VERSION}" \
     && chromium-docker --version
 
+# Liquid Prompt (github.com/liquidprompt/liquidprompt) for interactive bash
+# here too - same config as vscode-code-server-custom's integrated terminal:
+# git branch/status shown by default (LP_ENABLE_VCS_LINES=1 out of the box),
+# username/hostname always hidden (LP_USER_ALWAYS=-1 / LP_HOSTNAME_ALWAYS=-1).
+#
+# Cloned to /opt (root-owned, read-only at runtime) and configured via
+# /etc/liquidpromptrc + /etc/bash.bashrc rather than anything under
+# /home/node - HOME here is /workspace, the shared SMB PVC also mounted into
+# vscode, so anything under it can already hold arbitrary user data (a stray
+# ~/.liquidpromptrc would take precedence, since liquidprompt's own
+# config-file search order checks /etc/liquidpromptrc last). Sourced from
+# /etc/bash.bashrc, not a user rc file, so it fires for any interactive bash
+# regardless of PVC state - dsh's own terminal capability and the noVNC
+# desktop's xterm both spawn one.
+RUN git clone --depth 1 https://github.com/liquidprompt/liquidprompt.git /opt/liquidprompt \
+    && printf '%s\n' \
+      'LP_USER_ALWAYS=-1' \
+      'LP_HOSTNAME_ALWAYS=-1' \
+      > /etc/liquidpromptrc \
+    && printf '%s\n' \
+      '' \
+      '# Liquid Prompt - git-aware prompt, username/hostname hidden (see' \
+      '# /etc/liquidpromptrc). Guarded to interactive shells only.' \
+      '[[ $- == *i* ]] && source /opt/liquidprompt/liquidprompt' \
+      >> /etc/bash.bashrc
+
 # NODE_PATH: makes globally-installed packages (playwright) resolvable via
 # plain require()/import from any project under /workspace - see the
 # playwright RUN step above for why this is needed.
