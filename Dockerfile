@@ -104,14 +104,24 @@ LABEL org.opencontainers.image.title="DeepSeek Harness (custom build)" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${DSH_VERSION}"
 
-# Keep the runtime useful to a coding agent without shipping a compiler
-# toolchain. Chromium is installed from Debian so both linux/amd64 and
-# linux/arm64 stay native. Noto CJK keeps Chinese pages and screenshots
-# readable. pnpm is reinstalled here (not copied from the builder stage)
-# since the `dsh plugin` subcommand shells out to pnpm at runtime, in the
-# profile directory, not just at build time.
+# Chromium is installed from Debian so both linux/amd64 and linux/arm64
+# stay native. Noto CJK keeps Chinese pages and screenshots readable. pnpm
+# is reinstalled here (not copied from the builder stage) since the
+# `dsh plugin` subcommand shells out to pnpm at runtime, in the profile
+# directory, not just at build time.
+#
+# build-essential (make, g++, etc): the "no compiler toolchain in the
+# runtime" goal this comment used to state doesn't hold once `dsh plugin
+# add` can pull in a community plugin with native dependencies at
+# runtime - confirmed the hard way installing dsh-better-sidebar
+# (pulls node-pty, whose prebuilt binary doesn't cover this exact
+# Node 24 + Debian bookworm combination): node-gyp's source-build
+# fallback failed outright with "not found: make" with no toolchain
+# present. Runtime plugin installs need this now, not just the builder
+# stage.
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
+      build-essential \
       ca-certificates \
       chromium \
       curl \
