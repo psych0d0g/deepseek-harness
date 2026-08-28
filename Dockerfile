@@ -96,7 +96,13 @@ RUN pnpm install --frozen-lockfile \
 FROM ${NODE_IMAGE}
 
 ARG PNPM_VERSION=11.7.0
-ARG DSH_VERSION=0.1.1-rc.2
+# Label-only: no build-arg feeds this, so it drifts whenever apps/cli's own
+# version bumps and nobody remembers to edit this line. The install-sanity
+# check below (`test "$(dsh --version)" = ...`) does NOT use this ARG - it
+# reads the just-copied dsh package's own package.json instead, so a stale
+# label can no longer break the build the way it did before (a real failure:
+# "test \"0.1.2-alpha.1\" = \"0.1.1-rc.2\"" after an upstream version bump).
+ARG DSH_VERSION=0.1.2-alpha.1
 
 LABEL org.opencontainers.image.title="DeepSeek Harness (custom build)" \
       org.opencontainers.image.description="Custom container image built from a from-source fork of the DeepSeek Harness CLI, Web UI, and browser-accessible Chromium desktop" \
@@ -216,7 +222,7 @@ RUN chmod 0755 /usr/local/bin/chromium-docker \
     && if [ ! -e /usr/share/novnc/index.html ]; then \
       ln -s vnc.html /usr/share/novnc/index.html; \
     fi \
-    && test "$(dsh --version)" = "${DSH_VERSION}" \
+    && test "$(dsh --version)" = "$(node -p "require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version")" \
     && chromium-docker --version
 
 # Liquid Prompt (github.com/liquidprompt/liquidprompt) for interactive bash
