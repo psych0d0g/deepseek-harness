@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat } from 'node:fs/promises'
+import { chmod, link, lstat, mkdir, open, readFile, realpath, readdir, rename, rm, stat, statfs } from 'node:fs/promises'
 import type { BigIntStats, Dirent, Stats } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { TextDecoder } from 'node:util'
@@ -94,6 +94,8 @@ export interface FsIoInternals {
   linkFile?: (existingPath: string, newPath: string) => Promise<void>
   /** Override target inspection after guarded publication fails. */
   inspectPublicationTarget?: (path: string) => Promise<BigIntStats>
+  /** Override the CIFS/SMB detection that skips a chmod the filesystem doesn't support. */
+  isChmodUnsupported?: (path: string) => boolean | Promise<boolean>
   /** Override staging-directory removal for commit-point failure coverage. */
   removeStagingDir?: (stagingDir: string) => Promise<void>
   /** Test hook after the temp file is written/synced but before final chmod+publication. */
@@ -464,6 +466,41 @@ export async function* streamWholeText(target: LocalTarget, signal?: AbortSignal
 
 // --- Writing ---
 
+// CIFS_SUPER_MAGIC (Linux `fs/cifs/cifsfs.h`): the `statfs` filesystem-type
+// magic number shared by both the "cifs" and "smb3" mount types.
+const CIFS_SUPER_MAGIC = 0xff534d42
+
+/**
+ * Whether chmod is worth attempting against `path`'s filesystem. True only
+ * for a positively identified CIFS/SMB mount: SMB has no POSIX permission-bit
+ * model — access control lives in the server-side share ACL — so chmod
+ * against it commonly fails with `EPERM`/`EOPNOTSUPP` even though the
+ * create-time mode already passed to `mkdir`/`open` succeeded (subject to the
+ * server's own mode mapping). `statfs` failing, or reporting anything other
+ * than the CIFS magic, keeps today's behavior (attempt chmod) so an
+ * undetermined filesystem is not silently downgraded. The caller is
+ * responsible for the Windows short-circuit (its own `platform` already
+ * covers that case, and this predicate stays platform-agnostic).
+ * @param path - a path on the filesystem to probe (existing; typically the
+ * write's destination directory).
+ * @returns true when `path` is a CIFS/SMB mount and its chmod should be skipped.
+ */
+async function isChmodUnsupported(path: string): Promise<boolean> {
+  try {
+    const info = await statfs(path)
+    // A real CIFS/SMB mount is not obtainable in CI, so this only ever
+    // returns false here; the `skipChmod = true` behavior it drives is
+    // covered via the `internals.isChmodUnsupported` override in fsio.spec.ts.
+    return info.type === CIFS_SUPER_MAGIC
+  } catch {
+    // Needs a genuine statfs fault (e.g. the directory vanishing between
+    // mkdir and this probe); the caller's own filesystem operations already
+    // surface a real underlying fault.
+    /* v8 ignore next */
+    return false
+  }
+}
+
 async function removeStagingDirOrThrow(
   stagingDir: string,
   originalError: unknown,
@@ -519,11 +556,16 @@ async function throwGuardedCreateFailure(
  * Atomically replace a file through a private, synced staging file in the same directory.
  * POSIX protects the staging directory and file with `0o700` and `0o600`. A new Windows file
  * inherits the destination directory's DACL; a replacement copies the existing target's DACL
- * onto the empty temp before writing and preserves the target descriptor at publication.
+ * onto the empty temp before writing and preserves the target descriptor at publication. On a
+ * detected CIFS/SMB mount, chmod is skipped entirely (see {@link isChmodUnsupported}): the
+ * staging dir and temp file keep whatever mode `mkdir`/`open` produced, and `mode` is not
+ * reapplied to the published file, since SMB has no POSIX permission-bit model for chmod to
+ * target and the call commonly fails there instead of being the benign no-op it is on Windows.
  * @param absolutePath - destination; missing parent directories are created.
  * @param content - the full UTF-8 text to write.
  * @param mode - existing destination's POSIX mode to preserve, or `undefined` for a new file;
- * inert as a mode on Windows but identifies replacement security semantics.
+ * inert as a mode on Windows and on a CIFS/SMB mount, but identifies replacement security
+ * semantics.
  * @param signal - cancellation checked before final publication.
  * @param internals - Test hook for pinning temp names and observing the staged file.
  * @param createIfAbsent - when provided, publish with a hard-link no-replace
@@ -555,22 +597,27 @@ export async function writeFileAtomic(
     ?? (path => lstat(path, { bigint: true }))
   const removeStagingDir = internals.removeStagingDir
     ?? (path => rm(path, { recursive: true, force: true }))
+  const chmodUnsupported = internals.isChmodUnsupported ?? isChmodUnsupported
   let handle: Awaited<ReturnType<typeof open>> | undefined
   let stagingCreated = false
   try {
+    // Windows chmod is already a benign no-op (Windows fs permissions Agent
+    // Note), so the CIFS probe — Linux/POSIX-specific — only runs elsewhere.
+    const skipChmod = platform !== 'win32' && await chmodUnsupported(directory)
+
     await mkdir(stagingDir, { mode: 0o700 })
     stagingCreated = true
-    await chmod(stagingDir, 0o700)
+    if (!skipChmod) await chmod(stagingDir, 0o700)
 
     handle = await open(tempPath, 'wx', 0o600)
-    await handle.chmod(0o600)
+    if (!skipChmod) await handle.chmod(0o600)
     if (platform === 'win32' && mode !== undefined) {
       await copyFileDacl(absolutePath, tempPath)
     }
     await handle.writeFile(content, { encoding: 'utf8', ...signal ? { signal } : {} })
     await handle.sync()
     await internals.inspectTemp?.({ stagingDir, tempPath })
-    if (mode !== undefined) await handle.chmod(mode)
+    if (mode !== undefined && !skipChmod) await handle.chmod(mode)
     await handle.close()
     handle = undefined
 

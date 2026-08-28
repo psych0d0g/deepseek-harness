@@ -683,6 +683,47 @@ describe('writeFileAtomic — temp-file safety', () => {
     expect((await readdir(dir)).filter(n => n.includes('.tmp'))).toEqual([])
   })
 
+  it.skipIf(!posixModes)('skips chmod entirely on a detected CIFS/SMB mount, leaving create-time mode as-is', async () => {
+    const file = join(dir, 'a.txt')
+    await writeFile(file, 'old')
+    await chmod(file, 0o640)
+    let probed: string | undefined
+
+    await writeFileAtomic(file, 'hello', 0o640, undefined, {
+      isChmodUnsupported: async (path) => {
+        probed = path
+        return true
+      },
+      inspectTemp: async ({ stagingDir, tempPath }) => {
+        const [staging, temp] = await Promise.all([stat(stagingDir), stat(tempPath)])
+        // mkdir/open's create-time mode still applies; the probe only skips
+        // the redundant explicit chmod calls that would follow.
+        expect(staging.mode & 0o777).toBe(0o700)
+        expect(temp.mode & 0o777).toBe(0o600)
+      },
+    })
+
+    expect(probed).toBe(dir)
+    expect(await readFile(file, 'utf8')).toBe('hello')
+    // `mode` (0o640) is not reapplied: the published file keeps the temp's
+    // open()-time mode (0o600) instead of the preserved target mode.
+    expect((await stat(file)).mode & 0o777).toBe(0o600)
+  })
+
+  it('never probes for a CIFS/SMB mount on Windows, since chmod is already a benign no-op there', async () => {
+    const file = join(dir, 'new.txt')
+    const unexpected = async (): Promise<boolean> => { throw new Error('unexpected CIFS probe on win32') }
+
+    await writeFileAtomic(file, 'new', undefined, undefined, {
+      platform: 'win32',
+      isChmodUnsupported: unexpected,
+      copyFileDacl: async () => {},
+      replaceFile: async () => {},
+    })
+
+    expect(await readFile(file, 'utf8')).toBe('new')
+  })
+
   it.skipIf(process.platform !== 'win32')('protects staged content with the existing target DACL and preserves it after replacement', async () => {
     const file = join(dir, 'protected.txt')
     await writeFile(file, 'old')
