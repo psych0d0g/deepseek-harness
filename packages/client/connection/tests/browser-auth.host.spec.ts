@@ -56,7 +56,7 @@ function createAuth(
   maxAgeDays = 30,
   processOwner: object = {},
 ): Promise<BrowserAuth> {
-  return BrowserAuth.create(processOwner, credentials(store), maxAgeDays)
+  return BrowserAuth.create(processOwner, credentials(store), maxAgeDays, false)
 }
 
 function request(url: string, authority = '127.0.0.1:3080', init?: {
@@ -246,5 +246,24 @@ describe('BrowserAuth', () => {
 
     await expect(createAuth(new RecordCredentials(), Number.MAX_SAFE_INTEGER))
       .rejects.toThrow(/safe timestamp range/u)
+  })
+
+  it('disabled mode authorizes every request and never touches the credential store', async () => {
+    const store = new RecordCredentials()
+    const auth = await BrowserAuth.create({}, credentials(store), 30, true)
+    expect(store).toMatchObject({ reads: 0, modifies: 0 })
+
+    expect(auth.authenticatedUrl('http://127.0.0.1:3080')).toBe('http://127.0.0.1:3080/')
+
+    const bare = response()
+    expect(auth.authorizeIndex(request('/'), bare.value)).toBe(true)
+    expect(bare.state).toEqual({})
+
+    const wrongToken = response()
+    expect(auth.authorizeIndex(request('/?token=wrong'), wrongToken.value)).toBe(true)
+    expect(wrongToken.state).toEqual({})
+
+    expect(auth.isAuthenticated({ headers: {} })).toBe(true)
+    expect(auth.isAuthenticated(request('/', 'localhost:3080'))).toBe(true)
   })
 })

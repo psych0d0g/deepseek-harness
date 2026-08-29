@@ -81,7 +81,7 @@ function fakeResponse(): {
   return { response, state }
 }
 
-async function mounted(config?: { trustedHosts?: string[] }): Promise<{
+async function mounted(config?: { trustedHosts?: string[]; disableAuth?: boolean }): Promise<{
   routes: WebRoute[]
   upgrades: WebUpgradeRoute[]
   connection: HostConnectionHandle
@@ -191,6 +191,24 @@ describe('connection node half', () => {
     const forged = fakeResponse()
     await routes[0]!.handler(fakeRequest({ host: 'localhost:3080' }), forged.response)
     expect(forged.state).toMatchObject({ status: 401, body: 'unauthorized' })
+    await dispose()
+  })
+
+  it('disableAuth skips the browser session on every route, cookie or not', async () => {
+    const { routes, dispose } = await mounted({ trustedHosts: ['harness.example'], disableAuth: true })
+    const noCookie = fakeResponse()
+    await routes[0]!.handler(fakeRequest({ host: 'harness.example' }, `${API_PATH}/session.list`), noCookie.response)
+    expect(noCookie.state.status).toBe(404)
+    const withCookie = fakeResponse()
+    await routes[0]!.handler(fakeRequest({
+      host: 'harness.example', cookie: 'dsh-auth-anything=bogus',
+    }, `${API_PATH}/session.list`), withCookie.response)
+    expect(withCookie.state.status).toBe(404)
+    // The untrusted-authority fence still applies; disableAuth only skips
+    // the browser-session check, not Host/Origin trust.
+    const untrusted = fakeResponse()
+    await routes[0]!.handler(fakeRequest({ host: 'other.example' }, `${API_PATH}/session.list`), untrusted.response)
+    expect(untrusted.state).toMatchObject({ status: 403, body: 'forbidden' })
     await dispose()
   })
 

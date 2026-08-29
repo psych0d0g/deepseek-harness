@@ -182,13 +182,16 @@ async function initializeSecret(credentials: CredentialProvider): Promise<Buffer
  * Connection loads the credential provider's signing secret during activation
  * and retains it for synchronous request authentication.
  */
+/** Signing secret when authenticating, or an explicit opt-out marker. */
+type AuthState = { readonly kind: 'signing'; readonly secret: Buffer } | { readonly kind: 'disabled' }
+
 export class BrowserAuth {
   private readonly launchToken: string
   private readonly maxAgeMilliseconds: number
 
   private constructor(
     processOwner: object,
-    private readonly secret: Buffer,
+    private readonly state: AuthState,
     maxAgeDays: number,
   ) {
     this.launchToken = processLaunchToken(processOwner)
@@ -201,30 +204,41 @@ export class BrowserAuth {
 
   /**
    * Initialize browser authentication and create its durable signing secret
-   * when this Harness home has none.
+   * when this Harness home has none. Skipped entirely in disabled mode: no
+   * credential-store access, no secret.
    * @param processOwner - root application context retaining one token across Connection reloads.
    * @param credentials - persistent credential provider for the Web profile.
    * @param maxAgeDays - positive absolute browser-cookie lifetime in days.
+   * @param disabled - when true, every check passes unconditionally; the
+   * deployment authenticates callers itself (e.g. at its ingress) instead.
    * @returns initialized authentication owner with the process owner's launch token.
    */
   static async create(
     processOwner: object,
     credentials: CredentialProvider,
     maxAgeDays: number,
+    disabled: boolean,
   ): Promise<BrowserAuth> {
-    return new BrowserAuth(processOwner, await initializeSecret(credentials), maxAgeDays)
+    const state: AuthState = disabled
+      ? { kind: 'disabled' }
+      : { kind: 'signing', secret: await initializeSecret(credentials) }
+    return new BrowserAuth(processOwner, state, maxAgeDays)
   }
 
   /**
-   * Add this process's launch token to the ordinary application root URL.
+   * Add this process's launch token to the ordinary application root URL. In
+   * disabled mode there is nothing to authenticate, so this returns the
+   * plain root URL.
    * @param baseUrl - canonical browser origin without credentials.
-   * @returns root URL carrying the process token as its sole authentication input.
+   * @returns root URL carrying the process token as its sole authentication
+   * input, or the unchanged root URL when auth is disabled.
    */
   authenticatedUrl(baseUrl: string): string {
     const url = new URL(baseUrl)
     url.pathname = '/'
     url.search = ''
     url.hash = ''
+    if (this.state.kind === 'disabled') return url.href
     url.searchParams.set(TOKEN_QUERY, this.launchToken)
     return url.href
   }
@@ -233,11 +247,14 @@ export class BrowserAuth {
    * Authenticate an index request. A valid root query token mints the cookie
    * and redirects to clean `/`; a valid cookie lets the caller serve the
    * index; every other request receives the same minimal 401 response.
+   * Disabled mode always authorizes.
    * @param req - incoming root or configured-index request.
    * @param res - response owned when this method returns false.
    * @returns true only when the caller may serve index.html.
    */
   authorizeIndex(req: ConnectionIndexRequest, res: ConnectionIndexResponse): boolean {
+    const { state } = this
+    if (state.kind === 'disabled') return true
     /* v8 ignore next -- node:http always supplies url on server requests. */
     const url = new URL(req.url ?? '/', 'http://dsh.invalid')
     const tokens = url.searchParams.getAll(TOKEN_QUERY)
@@ -252,7 +269,7 @@ export class BrowserAuth {
           authority,
           issuedAt,
           expiresAt,
-        }, this.secret)
+        }, state.secret)
         res.writeHead(303, {
           'cache-control': 'no-store',
           'location': '/',
@@ -283,16 +300,19 @@ export class BrowserAuth {
 
   /**
    * Verify the authority-bound browser cookie on a Host request.
+   * Disabled mode always authenticates.
    * @param request - request headers carrying Host and Cookie.
    * @returns true only for an unexpired cookie signed by this activation's loaded secret.
    */
   isAuthenticated(request: ConnectionTrustRequest): boolean {
+    const { state } = this
+    if (state.kind === 'disabled') return true
     const authority = requestAuthority(request.headers)
     const rawCookie = header(request.headers, 'cookie')
     if (authority === undefined || rawCookie === undefined) return false
     const value = cookieValue(rawCookie, cookieName(authority))
     if (value === undefined) return false
-    const payload = decodeCookie(value, this.secret)
+    const payload = decodeCookie(value, state.secret)
     if (payload === undefined || payload.authority !== authority) return false
     const now = Date.now()
     return payload.issuedAt <= now

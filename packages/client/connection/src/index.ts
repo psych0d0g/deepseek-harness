@@ -81,18 +81,28 @@ export interface ConnectionConfig {
   cookieMaxAgeDays?: number
   /** Maximum buffered JSON body for every `/api` request. Default: 300 MiB. */
   maxRequestBodyBytes?: number
+  /**
+   * Skip the browser-session token/cookie check on `/` and every `/api`
+   * request unconditionally. Default: false. Only for a deployment that
+   * already authenticates callers itself before they reach this process
+   * (e.g. an authenticating reverse proxy) - loopback-only deployments get
+   * no benefit from it, since the check is what stands between a browser
+   * tab on an unrelated site and this process's stored credentials.
+   */
+  disableAuth?: boolean
 }
 
 export const Config: z<ConnectionConfig> = z.object({
   trustedHosts: z.array(String).default([]),
   cookieMaxAgeDays: z.natural().min(1).default(30),
   maxRequestBodyBytes: z.natural().min(1).default(DEFAULT_MAX_REQUEST_BODY_BYTES),
+  disableAuth: z.boolean().default(false),
 })
 
 /**
  * Mounts the API gateway under the browser transport prefix. Every request on
  * the prefix passes the Host/Origin browser-trust fence and persistent browser
- * authentication before dispatch.
+ * authentication before dispatch, unless `config.disableAuth` skips the latter.
  * @param ctx - Host plugin context.
  * @param config - resolved plugin config (schema defaults applied).
  */
@@ -101,6 +111,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   const trustedHosts = config?.trustedHosts ?? []
   const cookieMaxAgeDays = config?.cookieMaxAgeDays ?? 30
   const maxRequestBodyBytes = config?.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES
+  const disableAuth = config?.disableAuth ?? false
   // Config boundary: a malformed entry fails the load loudly here rather than
   // silently authorizing its hostname prefix at request time.
   for (const entry of trustedHosts) assertTrustedAuthority(entry)
@@ -108,7 +119,7 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
   const connection = new HostConnectionService(
     ctx,
     trustedHosts,
-    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays),
+    await BrowserAuth.create(ctx.root, ctx.credentials, cookieMaxAgeDays, disableAuth),
   )
   const fetchHandler = connection.createSharedFetchHandler(API_PATH)
   const route: WebRoute = {

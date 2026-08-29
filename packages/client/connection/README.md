@@ -38,6 +38,8 @@ The cookie signing secret is the owner-scoped `client-connection/browser-session
 
 Before authentication, every request still passes `src/api-request-trust.ts`. Its `Host` must be loopback or match a `trustedHosts` entry: exact on `host:port`, any port on port-less entries, both sides WHATWG-normalized. An attached `Origin` must equal that Host and `sec-fetch-site: cross-site` is refused. Malformed configured authorities fail plugin load. These checks defend DNS rebinding and cross-site browser requests; they never establish identity. A failed Host/Origin check returns 403, while a trusted but unauthenticated request returns 401. `dsh web --host 0.0.0.0` remains unsupported. Decision records: [browser request trust](../../../.agents/notes/implemented/architecture/2026-07-28-api-browser-trust-boundary.md) and [browser token authentication](../../../.agents/notes/implemented/architecture/2026-08-24-browser-token-authentication.md).
 
+`config.disableAuth` (default `false`) skips the browser-session check on `/` and every `/api` request unconditionally; `dsh web`'s printed URL then carries no token. The Host/Origin trust fence above still applies unchanged - this only removes the identity check behind it. It exists for a deployment that already authenticates callers itself before they reach this process (e.g. an authenticating reverse proxy); a loopback-only deployment gets no benefit from it, since the check is what stands between a browser tab on an unrelated site and this process's stored credentials.
+
 <a id="connection-generation"></a>
 ## Connection generation
 
