@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-28-cifs-chmod-skip.zh.md)
+
 ## Problem
 
 `writeFileAtomic` in `@deepseek-ai/dsh-fs-local` protects write-in-progress content with explicit `chmod` calls: the staging directory is chmodded `0o700` after `mkdir`, the temp file is chmodded `0o600` after `open`, and an existing target's mode is reapplied to the published file with a final `chmod`. On a CIFS/SMB mount, these calls commonly fail with `EPERM`/`EOPNOTSUPP`: SMB has no POSIX permission-bit model to set — access control lives in the server-side share ACL — so the client-side `chmod` syscall the CIFS filesystem driver forwards has nothing meaningful to do. Because these calls are unguarded, the failure propagates through the whole `writeFileAtomic` call and the `write`/`edit` tools fail outright, even though the actual content write (`open`/`writeFile`/`rename`) would otherwise have succeeded.

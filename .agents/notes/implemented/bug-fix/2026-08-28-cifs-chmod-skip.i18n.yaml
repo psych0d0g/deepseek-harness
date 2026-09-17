@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-28-cifs-chmod-skip.md
+2026-08-28-cifs-chmod-skip.md: 04de485a3c36b659adbd6473b9c0531ca2c53eb8
+2026-08-28-cifs-chmod-skip.zh.md: 00ecdbd3f2ee3dd29dbdeebb2460f12c326c1d3f
