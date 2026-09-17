@@ -63,15 +63,23 @@ ENV DSH_CLIENT_COMMIT_HASH=${CI_COMMIT_SHA}
 # package.json listing every tarball as a file: dependency - the same
 # operation a registry install would perform, just against local files.
 #
-# `pnpm exec tsx scripts/release/pack.ts ...` (not `pnpm run release:pack
-# -- ...`): pnpm forwards the literal `--` token itself into the script's
-# argv rather than stripping it, which broke pack.ts's own parseArgs (it
-# saw `--family` as an unexpected positional, not a flag, since parseArgs
-# treats a literal `--` as an explicit end-of-options marker).
+# `pnpm run release:pack --family ... --out ...` (no `--` separator, and
+# not `pnpm exec tsx scripts/release/pack.ts ...`): pack.ts's packMember
+# step now resolves the pnpm executable via pnpmInvocation(), which reads
+# `npm_execpath` from the environment and throws if it is unset - `pnpm
+# exec` never sets that variable (only `pnpm run` does), so the `pnpm
+# exec` form broke after upstream introduced this guard. A literal `--`
+# separator was tried too and rejected: pnpm forwards that token itself
+# into the script's argv rather than stripping it, which broke pack.ts's
+# own parseArgs (it saw `--family` as an unexpected positional, not a
+# flag, since parseArgs treats a literal `--` as an explicit
+# end-of-options marker). Omitting `--` entirely works because `pnpm run
+# <script> <args...>` forwards any args pnpm itself doesn't recognize
+# straight through, and `--family`/`--out` aren't pnpm run options.
 RUN pnpm install --frozen-lockfile \
     && pnpm run build:official \
-    && pnpm exec tsx scripts/release/pack.ts --family vendor --out /tmp/pack-vendor \
-    && pnpm exec tsx scripts/release/pack.ts --family dsh --out /tmp/pack-dsh \
+    && pnpm run release:pack --family vendor --out /tmp/pack-vendor \
+    && pnpm run release:pack --family dsh --out /tmp/pack-dsh \
     && mkdir -p /out/dsh \
     && node -e ' \
         const fs = require("fs"); \
