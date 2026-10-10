@@ -44,6 +44,8 @@ export interface ChildStartRequest {
   provider?: string
   /** The per-child model override, if the call passed one. */
   model?: string
+  /** The per-child reasoning-effort override (`agent()` option `effort`), if the call passed one. */
+  reasoningEffort?: string
 }
 
 /**

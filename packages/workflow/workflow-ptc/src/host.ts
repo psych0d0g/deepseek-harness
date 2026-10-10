@@ -4,6 +4,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { PtcBindingFunction, PtcJsonValue, PtcRuntime } from '@deepseek-ai/dsh-ptc-runtime'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import type { SubagentRun } from '@deepseek-ai/dsh-subagent'
 import { assertObjectJsonSchema } from '@deepseek-ai/dsh-tools'
@@ -46,6 +47,7 @@ function childRequest(value: unknown): ChildStartRequest {
   const prompt = text(request.prompt, 'prompt')
   const provider = request.provider === undefined ? undefined : text(request.provider, 'provider')
   const model = request.model === undefined ? undefined : text(request.model, 'model')
+  const reasoningEffort = request.reasoningEffort === undefined ? undefined : text(request.reasoningEffort, 'reasoningEffort')
   let schema: ObjectJsonSchema | undefined
   if (request.schema !== undefined) {
     const candidate = object(request.schema)
@@ -56,6 +58,7 @@ function childRequest(value: unknown): ChildStartRequest {
     prompt,
     ...provider === undefined ? {} : { provider },
     ...model === undefined ? {} : { model },
+    ...reasoningEffort === undefined ? {} : { reasoningEffort },
     ...schema === undefined ? {} : { schema },
   }
 }
@@ -202,10 +205,12 @@ export class PtcWorkflowRun implements WorkflowRun {
       parent: this.parent,
       signal: this.controller.signal,
       ...request.schema === undefined ? {} : { outputSchema: request.schema },
-      ...request.provider === undefined && request.model === undefined ? {} : {
+      ...request.provider === undefined && request.model === undefined && request.reasoningEffort === undefined ? {} : {
         agentOptions: {
           ...request.provider === undefined ? {} : { provider: request.provider },
           ...request.model === undefined ? {} : { model: request.model },
+          // Branded at the seam: the provider's reasoningEfforts map validates the id downstream.
+          ...request.reasoningEffort === undefined ? {} : { reasoningEffort: request.reasoningEffort as ReasoningEffortId },
         },
       },
     })
