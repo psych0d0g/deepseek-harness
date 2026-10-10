@@ -113,7 +113,7 @@ ARG PNPM_VERSION=11.7.0
 ARG DSH_VERSION=0.1.2-alpha.1
 
 LABEL org.opencontainers.image.title="DeepSeek Harness (custom build)" \
-      org.opencontainers.image.description="Custom container image built from a from-source fork of the DeepSeek Harness CLI, Web UI, and browser-accessible Chromium desktop" \
+      org.opencontainers.image.description="Custom container image built from a from-source fork of the DeepSeek Harness CLI and Web UI, with headless Chromium for Playwright" \
       org.opencontainers.image.source="https://github.com/psych0d0g/deepseek-harness" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${DSH_VERSION}"
@@ -142,18 +142,11 @@ RUN apt-get update \
       fonts-liberation \
       fonts-noto-cjk \
       git \
-      novnc \
-      openbox \
       openssh-client \
       procps \
       python3 \
       ripgrep \
       tini \
-      websockify \
-      x11-utils \
-      x11vnc \
-      xterm \
-      xvfb \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /usr/local/lib/node_modules/@deepseek-ai \
     && npm install --global --no-audit --no-fund "pnpm@${PNPM_VERSION}" \
@@ -168,13 +161,31 @@ RUN apt-get update \
 # arbitrary project directories.
 #
 # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1: reuses the Debian chromium package
-# already installed above for the noVNC browser-desktop feature instead of
+# installed above (headless, via the chromium-docker --no-sandbox wrapper) instead of
 # downloading Playwright's own bundled Chromium - one browser install to
 # maintain, no duplicate ~300MB download. A project using this must launch
 # with `channel: 'chromium', executablePath: process.env.CHROME_BIN`
 # rather than a bare `playwright.chromium.launch()` (which would look for
 # Playwright's own bundled browser that was deliberately never downloaded).
 RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global --no-audit --no-fund playwright
+
+# REA (Reverse Engineer Anything, morluto/rea): reverse-engineering MCP
+# server, registered as the stdio MCP `mcp-rea` (`rea mcp`) in the web
+# profile. Pinned global install instead of `npx rea-agents@latest` per MCP
+# start: offline-safe, reproducible, no cold npm fetch on every session.
+# Static JS/Electron/.NET/HAR analysis needs nothing else; website analysis
+# uses CHROME_BIN (chromium-docker). Native binaries would additionally need
+# Ghidra + a JDK, deliberately not installed here. Its bundled skill is
+# exposed through skill-filesystem's bundled root (DSH_BUNDLED_SKILL_DIR,
+# rank 600 = lowest priority, image-owned so it survives PVC state).
+ARG REA_VERSION=6.3.0
+RUN npm install --global --no-audit --no-fund "rea-agents@${REA_VERSION}" \
+    && mkdir -p /opt/deepseek-harness/skills \
+    && ln -s /usr/local/lib/node_modules/rea-agents/skills/reverse-engineer-anything \
+      /opt/deepseek-harness/skills/reverse-engineer-anything \
+    && test -f /opt/deepseek-harness/skills/reverse-engineer-anything/SKILL.md \
+    && test "$(node -p "require('/usr/local/lib/node_modules/rea-agents/package.json').version")" = "${REA_VERSION}" \
+    && command -v rea
 
 # Claude Code (Anthropic's coding-agent CLI) and Antigravity CLI (Google's
 # coding-agent CLI, github.com/google-antigravity/antigravity-cli) as
@@ -212,24 +223,13 @@ RUN npm install --global --no-audit --no-fund @anthropic-ai/claude-code \
 COPY --from=builder /out/dsh/node_modules/ /usr/local/lib/node_modules/
 COPY docker/scripts/chromium-docker /usr/local/bin/chromium-docker
 COPY docker/scripts/deepseek-harness-entrypoint /usr/local/bin/deepseek-harness-entrypoint
-COPY docker/plugins/dsh-browser-desktop /opt/deepseek-harness/plugins/dsh-browser-desktop
 
 RUN chmod 0755 /usr/local/bin/chromium-docker \
         /usr/local/bin/deepseek-harness-entrypoint \
-    && mkdir -p \
-      /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@runzhliu \
-      /opt/deepseek-harness/plugins/dsh-browser-desktop/node_modules/@deepseek-ai \
-    && ln -s /opt/deepseek-harness/plugins/dsh-browser-desktop \
-      /usr/local/lib/node_modules/@deepseek-ai/dsh/node_modules/@runzhliu/dsh-browser-desktop \
-    && ln -s /usr/local/lib/node_modules/@deepseek-ai/schemastery \
-      /opt/deepseek-harness/plugins/dsh-browser-desktop/node_modules/@deepseek-ai/schemastery \
     && ln -s ../lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh \
     && ln -s chromium-docker /usr/local/bin/chrome \
     && ln -s chromium-docker /usr/local/bin/google-chrome \
     && ln -s chromium-docker /usr/local/bin/google-chrome-stable \
-    && if [ ! -e /usr/share/novnc/index.html ]; then \
-      ln -s vnc.html /usr/share/novnc/index.html; \
-    fi \
     && test "$(dsh --version)" = "$(node -p "require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version")" \
     && chromium-docker --version
 
@@ -245,8 +245,7 @@ RUN chmod 0755 /usr/local/bin/chromium-docker \
 # ~/.liquidpromptrc would take precedence, since liquidprompt's own
 # config-file search order checks /etc/liquidpromptrc last). Sourced from
 # /etc/bash.bashrc, not a user rc file, so it fires for any interactive bash
-# regardless of PVC state - dsh's own terminal capability and the noVNC
-# desktop's xterm both spawn one.
+# regardless of PVC state - dsh's own terminal capability spawns one.
 RUN git clone --depth 1 https://github.com/liquidprompt/liquidprompt.git /opt/liquidprompt \
     && printf '%s\n' \
       'LP_USER_ALWAYS=-1' \
@@ -266,14 +265,13 @@ ENV DSH_HOME=/home/node/.dsh \
     DSH_TELEMETRY_DISABLED=1 \
     HOME=/workspace \
     NODE_ENV=production \
-    DISPLAY=:99 \
     NODE_PATH=/usr/local/lib/node_modules \
     XDG_RUNTIME_DIR=/tmp/runtime-node \
     CHROME_BIN=/usr/local/bin/chromium-docker \
     CHROME_PATH=/usr/local/bin/chromium-docker \
-    CHROME_USER_DATA_DIR=/home/node/.dsh/chrome-profile \
     BROWSER=/usr/local/bin/chromium-docker \
     PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-docker \
+    DSH_BUNDLED_SKILL_DIR=/opt/deepseek-harness/skills \
     XDG_CACHE_HOME=/tmp/.cache \
     XDG_CONFIG_HOME=/tmp/.config \
     XDG_DATA_HOME=/tmp/.local/share
@@ -286,7 +284,7 @@ RUN mkdir -p "${DSH_HOME}" /workspace \
 USER node
 WORKDIR /workspace
 
-EXPOSE 3080 6080
+EXPOSE 3080
 
 # The CLI mounts a config-only HMR watcher after profile boot. Scope Node's
 # internal-module access flag to the dsh process instead of exporting it via

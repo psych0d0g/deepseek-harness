@@ -226,18 +226,15 @@ export class BrowserAuth {
   }
 
   /**
-   * Add this process's launch token to the ordinary application root URL. In
-   * disabled mode there is nothing to authenticate, so this returns the
-   * plain root URL.
-   * @param baseUrl - canonical browser origin without credentials.
-   * @returns root URL carrying the process token as its sole authentication
-   * input, or the unchanged root URL when auth is disabled.
+   * Add this process's launch token to the caller's application URL. In
+   * disabled mode there is nothing to authenticate, so the URL is returned
+   * unchanged.
+   * @param baseUrl - clean browser URL whose authority and mount are preserved.
+   * @returns the same URL carrying the process token as its sole authentication
+   * input, or the unchanged URL when auth is disabled.
    */
   authenticatedUrl(baseUrl: string): string {
     const url = new URL(baseUrl)
-    url.pathname = '/'
-    url.search = ''
-    url.hash = ''
     if (this.state.kind === 'disabled') return url.href
     url.searchParams.set(TOKEN_QUERY, this.launchToken)
     return url.href
@@ -245,9 +242,9 @@ export class BrowserAuth {
 
   /**
    * Authenticate an index request. A valid root query token mints the cookie
-   * and redirects to clean `/`; a valid cookie lets the caller serve the
-   * index; every other request receives the same minimal 401 response.
-   * Disabled mode always authorizes.
+   * and redirects to the directory-relative clean `./`; a valid cookie lets
+   * the caller serve the index; every other request receives the same minimal
+   * 401 response. Disabled mode always authorizes.
    * @param req - incoming root or configured-index request.
    * @param res - response owned when this method returns false.
    * @returns true only when the caller may serve index.html.
@@ -272,7 +269,7 @@ export class BrowserAuth {
         }, state.secret)
         res.writeHead(303, {
           'cache-control': 'no-store',
-          'location': '/',
+          'location': './',
           'referrer-policy': 'no-referrer',
           'set-cookie': sessionCookie(
             cookieName(authority), value, expiresAt, Math.floor(this.maxAgeMilliseconds / 1000),
@@ -284,7 +281,7 @@ export class BrowserAuth {
       if (req.method === 'GET' && url.pathname === '/' && this.isAuthenticated(req)) {
         res.writeHead(303, {
           'cache-control': 'no-store',
-          'location': '/',
+          'location': './',
           'referrer-policy': 'no-referrer',
         })
         res.end()
