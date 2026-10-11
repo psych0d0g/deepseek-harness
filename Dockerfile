@@ -113,13 +113,13 @@ ARG PNPM_VERSION=11.7.0
 ARG DSH_VERSION=0.1.2-alpha.1
 
 LABEL org.opencontainers.image.title="DeepSeek Harness (custom build)" \
-      org.opencontainers.image.description="Custom container image built from a from-source fork of the DeepSeek Harness CLI and Web UI, with headless Chromium for Playwright" \
+      org.opencontainers.image.description="Custom container image built from a from-source fork of the DeepSeek Harness CLI and Web UI" \
       org.opencontainers.image.source="https://github.com/psych0d0g/deepseek-harness" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="${DSH_VERSION}"
 
-# Chromium is installed from Debian so both linux/amd64 and linux/arm64
-# stay native. Noto CJK keeps Chinese pages and screenshots readable. pnpm
+# No browser: Playwright MCP runs in its own pod (k8s_cluster
+# deployments/dsh-mcp/), so Chromium and its fonts are not installed. pnpm
 # is reinstalled here (not copied from the builder stage) since the
 # `dsh plugin` subcommand shells out to pnpm at runtime, in the profile
 # directory, not just at build time.
@@ -137,10 +137,7 @@ RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
       build-essential \
       ca-certificates \
-      chromium \
       curl \
-      fonts-liberation \
-      fonts-noto-cjk \
       git \
       openssh-client \
       procps \
@@ -152,40 +149,20 @@ RUN apt-get update \
     && npm install --global --no-audit --no-fund "pnpm@${PNPM_VERSION}" \
     && test "$(pnpm --version)" = "${PNPM_VERSION}"
 
-# Playwright as a globally-available library, not a new agent tool/plugin -
-# `require('playwright')`/`import ... from 'playwright'` works from any
-# project under /workspace without a local install first. Global npm
-# packages aren't on Node's normal module-resolution search path (it walks
-# up from the importing file's own ancestors, not global dirs) - NODE_PATH
-# (below, in the main ENV block) is what actually makes this work from
-# arbitrary project directories.
-#
-# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1: reuses the Debian chromium package
-# installed above (headless, via the chromium-docker --no-sandbox wrapper) instead of
-# downloading Playwright's own bundled Chromium - one browser install to
-# maintain, no duplicate ~300MB download. A project using this must launch
-# with `channel: 'chromium', executablePath: process.env.CHROME_BIN`
-# rather than a bare `playwright.chromium.launch()` (which would look for
-# Playwright's own bundled browser that was deliberately never downloaded).
-RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install --global --no-audit --no-fund playwright
-
-# REA (Reverse Engineer Anything, morluto/rea): reverse-engineering MCP
-# server, registered as the stdio MCP `mcp-rea` (`rea mcp`) in the web
-# profile. Pinned global install instead of `npx rea-agents@latest` per MCP
-# start: offline-safe, reproducible, no cold npm fetch on every session.
-# Static JS/Electron/.NET/HAR analysis needs nothing else; website analysis
-# uses CHROME_BIN (chromium-docker). Native binaries would additionally need
-# Ghidra + a JDK, deliberately not installed here. Its bundled skill is
-# exposed through skill-filesystem's bundled root (DSH_BUNDLED_SKILL_DIR,
-# rank 600 = lowest priority, image-owned so it survives PVC state).
-ARG REA_VERSION=6.3.0
-RUN npm install --global --no-audit --no-fund "rea-agents@${REA_VERSION}" \
-    && mkdir -p /opt/deepseek-harness/skills \
-    && ln -s /usr/local/lib/node_modules/rea-agents/skills/reverse-engineer-anything \
-      /opt/deepseek-harness/skills/reverse-engineer-anything \
-    && test -f /opt/deepseek-harness/skills/reverse-engineer-anything/SKILL.md \
-    && test "$(node -p "require('/usr/local/lib/node_modules/rea-agents/package.json').version")" = "${REA_VERSION}" \
-    && command -v rea
+# REA's reverse-engineer-anything skill only - the REA MCP server itself (with
+# Ghidra) runs in its own pod (github.com/psych0d0g/dsh-mcp-images, rea/).
+# Keep REA_VERSION equal to that image's so the skill describes the tools the
+# server exposes. Exposed through skill-filesystem's bundled root
+# (DSH_BUNDLED_SKILL_DIR, rank 600 = lowest priority, image-owned so it
+# survives PVC state).
+ARG REA_VERSION=6.4.0
+RUN mkdir -p /opt/deepseek-harness/skills /tmp/rea \
+    && cd /tmp/rea \
+    && npm pack --silent "rea-agents@${REA_VERSION}" \
+    && tar -xzf "rea-agents-${REA_VERSION}.tgz" package/skills/reverse-engineer-anything \
+    && mv package/skills/reverse-engineer-anything /opt/deepseek-harness/skills/ \
+    && cd / && rm -rf /tmp/rea /root/.npm \
+    && test -f /opt/deepseek-harness/skills/reverse-engineer-anything/SKILL.md
 
 # Claude Code (Anthropic's coding-agent CLI) and Antigravity CLI (Google's
 # coding-agent CLI, github.com/google-antigravity/antigravity-cli) as
@@ -206,7 +183,7 @@ RUN npm install --global --no-audit --no-fund "rea-agents@${REA_VERSION}" \
 # stage's own ENV block sets HOME=/workspace (that value is for the node
 # user's later runtime, not this root build step), then relocated into
 # /usr/local/bin to be found on PATH regardless of runtime HOME, matching
-# the symlink pattern already used for dsh/chromium-docker below.
+# the symlink pattern already used for dsh below.
 RUN npm install --global --no-audit --no-fund @anthropic-ai/claude-code \
     && test -n "$(command -v claude)" \
     && HOME=/root curl -fsSL https://antigravity.google/cli/install.sh | bash \
@@ -221,17 +198,11 @@ RUN npm install --global --no-audit --no-fund @anthropic-ai/claude-code \
 # itself as a candidate directory, so hoisted siblings resolve correctly
 # from dsh's own lib/bin.js once the whole tree lands at the same level.
 COPY --from=builder /out/dsh/node_modules/ /usr/local/lib/node_modules/
-COPY docker/scripts/chromium-docker /usr/local/bin/chromium-docker
 COPY docker/scripts/deepseek-harness-entrypoint /usr/local/bin/deepseek-harness-entrypoint
 
-RUN chmod 0755 /usr/local/bin/chromium-docker \
-        /usr/local/bin/deepseek-harness-entrypoint \
+RUN chmod 0755 /usr/local/bin/deepseek-harness-entrypoint \
     && ln -s ../lib/node_modules/@deepseek-ai/dsh/lib/bin.js /usr/local/bin/dsh \
-    && ln -s chromium-docker /usr/local/bin/chrome \
-    && ln -s chromium-docker /usr/local/bin/google-chrome \
-    && ln -s chromium-docker /usr/local/bin/google-chrome-stable \
-    && test "$(dsh --version)" = "$(node -p "require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version")" \
-    && chromium-docker --version
+    && test "$(dsh --version)" = "$(node -p "require('/usr/local/lib/node_modules/@deepseek-ai/dsh/package.json').version")"
 
 # Liquid Prompt (github.com/liquidprompt/liquidprompt) for interactive bash
 # here too - same config as vscode-code-server-custom's integrated terminal:
@@ -258,19 +229,16 @@ RUN git clone --depth 1 https://github.com/liquidprompt/liquidprompt.git /opt/li
       '[[ $- == *i* ]] && source /opt/liquidprompt/liquidprompt' \
       >> /etc/bash.bashrc
 
-# NODE_PATH: makes globally-installed packages (playwright) resolvable via
-# plain require()/import from any project under /workspace - see the
-# playwright RUN step above for why this is needed.
+# NODE_PATH: makes the globally-installed tree resolvable via require() (CJS
+# only; ESM ignores NODE_PATH) from outside it. Introduced for the global
+# playwright install, now gone; kept until nothing CJS outside the tree is
+# confirmed to rely on it.
 ENV DSH_HOME=/home/node/.dsh \
     DSH_TELEMETRY_DISABLED=1 \
     HOME=/workspace \
     NODE_ENV=production \
     NODE_PATH=/usr/local/lib/node_modules \
     XDG_RUNTIME_DIR=/tmp/runtime-node \
-    CHROME_BIN=/usr/local/bin/chromium-docker \
-    CHROME_PATH=/usr/local/bin/chromium-docker \
-    BROWSER=/usr/local/bin/chromium-docker \
-    PUPPETEER_EXECUTABLE_PATH=/usr/local/bin/chromium-docker \
     DSH_BUNDLED_SKILL_DIR=/opt/deepseek-harness/skills \
     XDG_CACHE_HOME=/tmp/.cache \
     XDG_CONFIG_HOME=/tmp/.config \

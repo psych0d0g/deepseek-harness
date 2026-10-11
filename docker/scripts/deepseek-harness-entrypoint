@@ -1,8 +1,7 @@
 #!/bin/sh
-# Container entrypoint (runs under tini). The noVNC/Xvfb browser desktop and
-# its @runzhliu/dsh-browser-desktop plugin were removed 2026-10-10: Playwright
-# (headless Chromium via CHROME_BIN=chromium-docker) covers testing and
-# screenshots. tini forwards signals, so dsh can simply replace this shell.
+# Container entrypoint (runs under tini). The image carries no browser:
+# Playwright MCP (testing, screenshots) runs in its own pod. tini forwards
+# signals, so dsh can simply replace this shell.
 set -eu
 
 exec node --expose-internals \
