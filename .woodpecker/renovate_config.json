@@ -1,3 +1,6 @@
 {
-    "repositories": ["psych0d0g/deepseek-harness"]
+    "repositories": [
+        "psych0d0g/deepseek-harness",
+        "psych0d0g/dsh-mcp-images"
+    ]
 }
